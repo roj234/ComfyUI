@@ -40,6 +40,7 @@ import warnings
 
 MMAP_TORCH_FILES = args.mmap_torch_files
 DISABLE_MMAP = args.disable_mmap
+USE_ALT_SFT_LOADER = args.sft_alt_loader
 
 
 if True:  # ckpt/pt file whitelist for safe loading of old sd files
@@ -94,7 +95,7 @@ def _incomplete_safetensors_error(message, ckpt):
     return ValueError("{}\n\nFile path: {}\n\nThe safetensors file is corrupt/incomplete. Check the file size and make sure you have copied/downloaded it correctly.".format(message, ckpt))
 
 
-def load_safetensors(ckpt):
+def load_safetensors(ckpt, device):
     import comfy_aimdo.model_mmap
 
     file_size = os.path.getsize(ckpt)
@@ -151,6 +152,10 @@ def load_safetensors(ckpt):
                         "_comfy_tensor_file_slice",
                         comfy.memory_management.TensorFileSlice(f, file_lock, data_base_offset + start, end - start))
                 setattr(storage, "_comfy_tensor_mmap_refs", (model_mmap, mv))
+                if USE_ALT_SFT_LOADER:
+                    tensor = tensor.to(device=device, copy=True)
+                elif (device != 'cpu' if isinstance(device, str) else device.type != 'cpu'):
+                    tensor = tensor.to(device)
                 sd[name] = tensor
 
     return sd, header.get("__metadata__", {}),
@@ -162,8 +167,8 @@ def load_torch_file(ckpt, safe_load=False, device=None, return_metadata=False):
     metadata = None
     if ckpt.lower().endswith(".safetensors") or ckpt.lower().endswith(".sft"):
         try:
-            if comfy.memory_management.aimdo_enabled:
-                sd, metadata = load_safetensors(ckpt)
+            if USE_ALT_SFT_LOADER or comfy.memory_management.aimdo_enabled:
+                sd, metadata = load_safetensors(ckpt, device)
                 if not return_metadata:
                     metadata = None
             else:
@@ -171,8 +176,6 @@ def load_torch_file(ckpt, safe_load=False, device=None, return_metadata=False):
                     sd = {}
                     for k in f.keys():
                         tensor = f.get_tensor(k)
-                        if DISABLE_MMAP:  # TODO: Not sure if this is the best way to bypass the mmap issues
-                            tensor = tensor.to(device=device, copy=True)
                         sd[k] = tensor
                     if return_metadata:
                         metadata = f.metadata()
